@@ -41,6 +41,7 @@
 #include "state_machine_helper.h"
 #include "worker_thread.hpp"
 
+#include <containers/Bitset.hpp>
 #include <lib/controllib/blocks.hpp>
 #include <lib/hysteresis/hysteresis.h>
 #include <lib/mathlib/mathlib.h>
@@ -347,7 +348,7 @@ private:
 
 	uint8_t		_battery_warning{battery_status_s::BATTERY_WARNING_NONE};
 	hrt_abstime	_battery_failsafe_timestamp{0};
-	uint8_t		_last_connected_batteries{0};
+	px4::Bitset<battery_status_s::MAX_INSTANCES> _last_connected_batteries;
 	uint32_t	_last_battery_custom_fault[battery_status_s::MAX_INSTANCES] {};
 	uint16_t	_last_battery_fault[battery_status_s::MAX_INSTANCES] {};
 	uint8_t		_last_battery_mode[battery_status_s::MAX_INSTANCES] {};
@@ -402,7 +403,7 @@ private:
 	vehicle_status_s        _vehicle_status{};
 	vehicle_status_flags_s  _vehicle_status_flags{};
 
-	Safety _safety{};
+	Safety _safety;
 
 	WorkerThread _worker_thread;
 

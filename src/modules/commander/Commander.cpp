@@ -2298,21 +2298,22 @@ Commander::run()
 		}
 
 		/* safety button */
-		bool safety_updated = _safety.safetyButtonHandler();
+		const bool safety_changed = _safety.safetyButtonHandler();
 		_vehicle_status.safety_button_available = _safety.isButtonAvailable();
 		_vehicle_status.safety_off = _safety.isSafetyOff();
 
-		if (safety_updated) {
-
+		if (safety_changed) {
 			set_health_flags(subsystem_info_s::SUBSYSTEM_TYPE_MOTORCONTROL, _safety.isButtonAvailable(), _safety.isSafetyOff(),
 					 _safety.isButtonAvailable(), _vehicle_status);
 
 			// Notify the user if the status of the safety button changes
-			if (_safety.isSafetyOff()) {
-				set_tune(tune_control_s::TUNE_ID_NOTIFY_POSITIVE);
+			if (!_safety.isSafetyDisabled()) {
+				if (_safety.isSafetyOff()) {
+					set_tune(tune_control_s::TUNE_ID_NOTIFY_POSITIVE);
 
-			} else {
-				tune_neutral(true);
+				} else {
+					tune_neutral(true);
+				}
 			}
 
 			_status_changed = true;
@@ -2684,7 +2685,7 @@ Commander::run()
 			 * just a tablet. Since the RC will force its mode switch setting on connecting
 			 * we can as well just wait in a hold mode which enables tablet control.
 			 */
-			if (_vehicle_status.rc_signal_lost && (_commander_state.main_state == commander_state_s::MAIN_STATE_MANUAL)
+			if (_vehicle_status.rc_signal_lost && (_commander_state.main_state_changes == 0)
 			    && _vehicle_status_flags.global_position_valid) {
 
 				main_state_transition(_vehicle_status, commander_state_s::MAIN_STATE_AUTO_LOITER, _vehicle_status_flags,
@@ -2900,21 +2901,26 @@ Commander::run()
 			}
 		}
 
-		// check for arming state change
+		// check for arming state changes
 		if (_was_armed != _arm_state_machine.isArmed()) {
 			_status_changed = true;
+		}
 
-			if (_arm_state_machine.isArmed()) {
-				if (!_vehicle_land_detected.landed) { // check if takeoff already detected upon arming
-					_have_taken_off_since_arming = true;
-				}
+		if (!_was_armed && _arm_state_machine.isArmed() && !_vehicle_land_detected.landed) {
+			_have_taken_off_since_arming = true;
+		}
 
-			} else { // increase the flight uuid upon disarming
-				const int32_t flight_uuid = _param_flight_uuid.get() + 1;
-				_param_flight_uuid.set(flight_uuid);
-				_param_flight_uuid.commit_no_notification();
+		if (_was_armed && !_arm_state_machine.isArmed()) {
+			const int32_t flight_uuid = _param_flight_uuid.get() + 1;
+			_param_flight_uuid.set(flight_uuid);
+			_param_flight_uuid.commit_no_notification();
 
-				_last_disarmed_timestamp = hrt_absolute_time();
+			_last_disarmed_timestamp = hrt_absolute_time();
+
+			// Switch back to Hold mode after autonomous landing
+			if (_vehicle_control_mode.flag_control_auto_enabled) {
+				main_state_transition(_vehicle_status, commander_state_s::MAIN_STATE_AUTO_LOITER,
+						      _vehicle_status_flags, _commander_state);
 			}
 		}
 
@@ -3800,7 +3806,7 @@ void Commander::avoidance_check()
 
 void Commander::battery_status_check()
 {
-	int battery_required_count{0};
+	size_t battery_required_count = 0;
 	bool battery_has_fault = false;
 	// There are possibly multiple batteries, and we can't know which ones serve which purpose. So the safest
 	// option is to check if ANY of them have a warning, and specifically find which one has the most
@@ -3825,7 +3831,7 @@ void Commander::battery_status_check()
 
 		if (_arm_state_machine.isArmed()) {
 
-			if ((_last_connected_batteries & (1 << index)) && !battery.connected) {
+			if (_last_connected_batteries[index] && !battery.connected) {
 				mavlink_log_critical(&_mavlink_log_pub, "Battery %d disconnected. Land now! \t", index + 1);
 				events::send<uint8_t>(events::ID("commander_battery_disconnected"), {events::Log::Emergency, events::LogInternal::Warning},
 						      "Battery {1} disconnected. Land now!", index + 1);
@@ -3842,13 +3848,7 @@ void Commander::battery_status_check()
 			}
 		}
 
-		if (battery.connected) {
-			_last_connected_batteries |= 1 << index;
-
-		} else {
-			_last_connected_batteries &= ~(1 << index);
-		}
-
+		_last_connected_batteries.set(index, battery.connected);
 		_last_battery_mode[index] = battery.mode;
 
 		if (battery.connected) {
@@ -3953,7 +3953,7 @@ void Commander::battery_status_check()
 		// All connected batteries are regularly being published
 		(hrt_elapsed_time(&oldest_update) < 5_s)
 		// There is at least one connected battery (in any slot)
-		&& (math::countSetBits(_last_connected_batteries) >= battery_required_count)
+		&& (_last_connected_batteries.count() >= battery_required_count)
 		// No currently-connected batteries have any warning
 		&& (_battery_warning == battery_status_s::BATTERY_WARNING_NONE)
 		// No currently-connected batteries have any fault
